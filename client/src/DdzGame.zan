@@ -1,8 +1,10 @@
 using System;
 using System.IO;
 using Gui;
+using Gui.Backend;
 using Game.Kit;
 using Game.Foundation.Gui;
+using Game.Cards;
 
 public class DdzGame {
     Canvas c;
@@ -25,6 +27,7 @@ public class DdzGame {
     int lastWho;  // who owns the current table combo (-1 free lead)
     Combo table;  // combo to beat
     Combo shown0; Combo shown1; Combo shown2;  // last played per seat (for display)
+    List<int> shown0Cards; List<int> shown1Cards; List<int> shown2Cards;  // 具体牌 id（画牌用）
     bool passed1; bool passed2; bool passed0;
     int mult;  // bombs double
     int winner;  // 1 you win beans, 2 you lose
@@ -268,6 +271,7 @@ public class DdzGame {
         this.winner = 0;
         this.table = Combo.None();
         this.shown0 = Combo.None(); this.shown1 = Combo.None(); this.shown2 = Combo.None();
+        this.shown0Cards = new List<int>(); this.shown1Cards = new List<int>(); this.shown2Cards = new List<int>();
         this.lastWho = -1;
         this.pops = new List<DdzPopup>();
         this.parts = new List<DdzParticle>();
@@ -363,147 +367,26 @@ public class DdzGame {
     }
 
 
-    static Combo Classify(List<int> cards) {
-        Combo no = Combo.None();
-        int n = cards.Count;
-        if (n == 0) { return no; }
-        int[] cnt = new int[18];
-        for (int i = 0; i < n; i = i + 1) { int v = DdzGame.Val(cards[i]); cnt[v] = cnt[v] + 1; }
-        Combo c = new Combo();
-        c.cards = cards;
-        if (n == 1) { c.type = 1; c.key = DdzGame.Val(cards[0]); return c; }
-        if (n == 2) {
-            if (cnt[16] == 1 && cnt[17] == 1) { c.type = 9; c.key = 17; return c; }
-            if (cnt[DdzGame.Val(cards[0])] == 2) { c.type = 2; c.key = DdzGame.Val(cards[0]); return c; }
-            return no;
-        }
-        int trip = -1; int quad = -1; int pairV = -1; int single = -1;
-        int distinct = 0;
-        int v2 = 3;
-        while (v2 <= 17) {
-            if (cnt[v2] > 0) { distinct = distinct + 1; }
-            if (cnt[v2] == 4) { quad = v2; }
-            if (cnt[v2] == 3) { trip = v2; }
-            if (cnt[v2] == 2) { pairV = v2; }
-            if (cnt[v2] == 1) { single = v2; }
-            v2 = v2 + 1;
-        }
-        if (n == 3) { if (trip >= 0) { c.type = 3; c.key = trip; return c; } return no; }
-        if (n == 4) {
-            if (quad >= 0) { c.type = 8; c.key = quad; return c; }
-            if (trip >= 0) { c.type = 4; c.key = trip; return c; }
-            return no;
-        }
-        if (n == 5 && trip >= 0 && pairV >= 0) { c.type = 5; c.key = trip; return c; }
-        // 顺子牌型判定。
-        if (n >= 5 && distinct == n) {
-            int lo = 0; int hi = 0;
-            v2 = 3;
-            while (v2 <= 14) {
-                if (cnt[v2] > 0) { if (lo == 0) { lo = v2; } hi = v2; }
-                if (cnt[v2] > 1 || (v2 > 14 && cnt[v2] > 0)) { return no; }
-                v2 = v2 + 1;
-            }
-            if (cnt[15] > 0 || cnt[16] > 0 || cnt[17] > 0) { return no; }
-            if (hi - lo + 1 == n) { c.type = 6; c.key = hi; c.len = n; return c; }
-            return no;
-        }
-        // 连对牌型判定。
-        if (n >= 6 && n % 2 == 0) {
-            int lo = 0; int hi = 0; bool ok = true;
-            v2 = 3;
-            while (v2 <= 17) {
-                if (cnt[v2] > 0) {
-                    if (cnt[v2] != 2 || v2 > 14) { ok = false; }
-                    if (lo == 0) { lo = v2; }
-                    hi = v2;
-                }
-                v2 = v2 + 1;
-            }
-            if (ok && (hi - lo + 1) * 2 == n) { c.type = 7; c.key = hi; c.len = n / 2; return c; }
-        }
-        return no;
+    // 牌面 id → 点数（包只认点数；牌面编码是 点数*4 + 花色）。
+    static List<int> RanksOf(List<int> cards) {
+        List<int> res = new List<int>();
+        for (int i = 0; i < cards.Count; i = i + 1) { res.Add(DdzGame.Val(cards[i])); }
+        return res;
     }
 
-    static bool Beats(Combo a, Combo b) {
-        // 牌型大小与压牌规则比对。
-        if (a.type == 0) { return false; }
-        if (b.type == 0) { return true; }
-        if (a.type == 9) { return true; }
-        if (b.type == 9) { return false; }
-        if (a.type == 8 && b.type != 8) { return true; }
-        if (b.type == 8 && a.type != 8) { return false; }
-        if (a.type != b.type) { return false; }
-        if ((a.type == 6 || a.type == 7) && a.len != b.len) { return false; }
-        return a.key > b.key;
-    }
-
-
-    // 从手牌检索所有可出牌型候选项。
-    List<Combo> Candidates(List<int> h, Combo tbl) {
-        List<Combo> res = new List<Combo>();
-        int[] cnt = new int[18];
-        for (int i = 0; i < h.Count; i = i + 1) { cnt[DdzGame.Val(h[i])] = cnt[DdzGame.Val(h[i])] + 1; }
-        // 提取指定张数的同点数手牌组合。
-        int v = 3;
-        while (v <= 17) {
-            if (cnt[v] >= 1) { this.AddCand(res, h, v, 1, tbl); }
-            if (cnt[v] >= 2) { this.AddCand(res, h, v, 2, tbl); }
-            if (cnt[v] >= 3) { this.AddCand(res, h, v, 3, tbl); this.AddTripKick(res, h, v, cnt, tbl); }
-            if (cnt[v] >= 4) { this.AddCand(res, h, v, 4, tbl); }
-            v = v + 1;
-        }
-        // rocket
-        if (cnt[16] > 0 && cnt[17] > 0) {
-            List<int> cs = new List<int>();
-            cs.Add(64); cs.Add(68);
-            Combo c = DdzGame.Classify(cs);
-            if (DdzGame.Beats(c, tbl)) { res.Add(c); }
-        }
-        // straights
-        int len = 5;
-        while (len <= 12) {
-            int lo = 3;
-            while (lo + len - 1 <= 14) {
-                bool ok = true;
-                int k = 0;
-                for (; k < len; k = k + 1) { if (cnt[lo + k] < 1) { ok = false; k = len; } }
-                if (ok) {
-                    List<int> cs = new List<int>();
-                    k = 0;
-                    while (k < len) { cs.Add(this.PickCard(h, lo + k, cs)); k = k + 1; }
-                    Combo c = DdzGame.Classify(cs);
-                    if (c.type == 6 && DdzGame.Beats(c, tbl)) { res.Add(c); }
-                }
-                lo = lo + 1;
-            }
-            len = len + 1;
-        }
-        len = 3;
-        while (len <= 8) {
-            int lo = 3;
-            while (lo + len - 1 <= 14) {
-                bool ok = true;
-                int k = 0;
-                for (; k < len; k = k + 1) { if (cnt[lo + k] < 2) { ok = false; k = len; } }
-                if (ok) {
-                    List<int> cs = new List<int>();
-                    k = 0;
-                    while (k < len) {
-                        cs.Add(this.PickCard(h, lo + k, cs));
-                        cs.Add(this.PickCard(h, lo + k, cs));
-                        k = k + 1;
-                    }
-                    Combo c = DdzGame.Classify(cs);
-                    if (c.type == 7 && DdzGame.Beats(c, tbl)) { res.Add(c); }
-                }
-                lo = lo + 1;
-            }
-            len = len + 1;
+    // 牌型的点数 → 手牌里的具体牌 id（出牌与移除都要用真实牌）。
+    List<int> CardsOf(Combo c, List<int> hand) {
+        List<int> res = new List<int>();
+        List<int> used = new List<int>();
+        for (int i = 0; i < c.ranks.Count; i = i + 1) {
+            int card = this.PickCard(hand, c.ranks[i], used);
+            res.Add(card);
+            used.Add(card);
         }
         return res;
     }
 
+    // 从手牌里挑一张点数为 v、且不在 used 里的牌（找不到返回 -1）。
     int PickCard(List<int> h, int v, List<int> used) {
         for (int i = 0; i < h.Count; i = i + 1) {
             int card = h[i];
@@ -515,41 +398,10 @@ public class DdzGame {
         }
         return -1;
     }
-
-    void AddCand(List<Combo> res, List<int> h, int v, int k, Combo tbl) {
-        List<int> cs = new List<int>();
-        for (int i = 0; i < k; i = i + 1) { cs.Add(this.PickCard(h, v, cs)); }
-        Combo c = DdzGame.Classify(cs);
-        if (c.type != 0 && DdzGame.Beats(c, tbl)) { res.Add(c); }
+    // 手牌里能压过桌面的所有出法（牌型识别在 Game.Cards 里）。
+    List<Combo> Candidates(List<int> h, Combo tbl) {
+        return ComboRules.Candidates(DdzGame.RanksOf(h), tbl);
     }
-
-    void AddTripKick(List<Combo> res, List<int> h, int v, int[] cnt, Combo tbl) {
-        // 组装三带一与三带二候选项。
-        int kick = 3;
-        while (kick <= 17) {
-            if (kick != v && cnt[kick] >= 1) {
-                List<int> cs = new List<int>();
-                for (int i = 0; i < 3; i = i + 1) { cs.Add(this.PickCard(h, v, cs)); }
-                cs.Add(this.PickCard(h, kick, cs));
-                Combo c = DdzGame.Classify(cs);
-                if (c.type == 4 && DdzGame.Beats(c, tbl)) { res.Add(c); kick = 18; }
-            }
-            kick = kick + 1;
-        }
-        kick = 3;
-        while (kick <= 15) {
-            if (kick != v && cnt[kick] >= 2) {
-                List<int> cs = new List<int>();
-                for (int i = 0; i < 3; i = i + 1) { cs.Add(this.PickCard(h, v, cs)); }
-                cs.Add(this.PickCard(h, kick, cs));
-                cs.Add(this.PickCard(h, kick, cs));
-                Combo c = DdzGame.Classify(cs);
-                if (c.type == 5 && DdzGame.Beats(c, tbl)) { res.Add(c); kick = 18; }
-            }
-            kick = kick + 1;
-        }
-    }
-
     Combo AiChoose(int who, int now) {
         List<int> h = this.hand1;
         if (who == 2) { h = this.hand2; }
@@ -565,7 +417,7 @@ public class DdzGame {
             int ws = 1000000;
             for (int wi = 0; wi < cands.Count; wi = wi + 1) {
                 Combo c = cands[wi];
-                int s = c.key * 10 + c.cards.Count;
+                int s = c.key * 10 + c.ranks.Count;
                 if (c.type >= 8) { s = s + 5000; }
                 if (s < ws) { ws = s; pick = c; }
             }
@@ -585,15 +437,15 @@ public class DdzGame {
             Combo c = cands[i];
             int s = 0;
             s = s - c.key * 6;
-            s = s + c.cards.Count * 30;  // shed more cards
+            s = s + c.ranks.Count * 30;  // shed more cards
             if (c.type == 8) { s = s - 400; }  // hold bombs
             if (c.type == 9) { s = s - 600; }
             if (c.key >= 15) { s = s - 90; }  // hold 2s / jokers
-            if (h.Count <= 6) { s = s + c.cards.Count * 60; }
+            if (h.Count <= 6) { s = s + c.ranks.Count * 60; }
             if (this.diff == 2) {
                 // 高级 AI：优先走大长牌与压制。
-                s = s + c.cards.Count * 25;
-                if (h.Count <= 9) { s = s + c.cards.Count * 50; }
+                s = s + c.ranks.Count * 25;
+                if (h.Count <= 9) { s = s + c.ranks.Count * 50; }
             }
             if (s > bestScore) { bestScore = s; best = c; }
         }
@@ -608,7 +460,7 @@ public class DdzGame {
             }
             if (this.diff == 2 && this.landlord == 0 && this.hand0.Count <= 5) {
                 // 终局阻截地主冲刺出牌。
-            } else if (this.diff == 2 && !leading && this.table.cards.Count < 2 && this.table.key < 14) {
+            } else if (this.diff == 2 && !leading && this.table.ranks.Count < 2 && this.table.key < 14) {
                 return Combo.None();
             }
         }
@@ -624,22 +476,22 @@ public class DdzGame {
         }
     }
 
-    void PlayCombo(int who, Combo c, int now) {
+    void PlayCombo(int who, Combo c, List<int> played, int now) {
         int cardsLeft = 0;
         if (who == 0) {
-            this.RemovePlayerCards(c.cards);
+            this.RemovePlayerCards(played);
             cardsLeft = this.hand0.Count;
         } else {
             List<int> h = this.hand1;
             if (who == 2) { h = this.hand2; }
-            this.RemoveCards(h, c.cards);
+            this.RemoveCards(h, played);
             cardsLeft = h.Count;
         }
         this.table = c;
         this.lastWho = who;
-        if (who == 0) { this.shown0 = c; }
-        if (who == 1) { this.shown1 = c; }
-        if (who == 2) { this.shown2 = c; }
+        if (who == 0) { this.shown0 = c; this.shown0Cards = played; }
+        if (who == 1) { this.shown1 = c; this.shown1Cards = played; }
+        if (who == 2) { this.shown2 = c; this.shown2Cards = played; }
         if (c.type == 8) {
             this.mult = this.mult * 2;
             this.Toast("炸弹！倍数 x" + this.mult, now);
@@ -667,9 +519,9 @@ public class DdzGame {
     }
 
     void PassTurn(int who, int now) {
-        if (who == 0) { this.shown0 = Combo.None(); }
-        if (who == 1) { this.shown1 = Combo.None(); }
-        if (who == 2) { this.shown2 = Combo.None(); }
+        if (who == 0) { this.shown0 = Combo.None(); this.shown0Cards = new List<int>(); }
+        if (who == 1) { this.shown1 = Combo.None(); this.shown1Cards = new List<int>(); }
+        if (who == 2) { this.shown2 = Combo.None(); this.shown2Cards = new List<int>(); }
         this.NextTurn(now);
     }
 
@@ -722,11 +574,11 @@ public class DdzGame {
         if (this.turn != 0 || this.scene != 2) { return; }
         List<int> cs = this.Selected();
         if (cs.Count == 0) { this.Toast("先选牌再出", now); return; }
-        Combo c = DdzGame.Classify(cs);
-        if (c.type == 0) { this.Toast("不是合法牌型", now); return; }
+        Combo c = ComboRules.Classify(DdzGame.RanksOf(cs));
+        if (c.IsNone()) { this.Toast("不是合法牌型", now); return; }
         bool leading = this.lastWho < 0 || this.lastWho == 0;
-        if (!leading && !DdzGame.Beats(c, this.table)) { this.Toast("压不过上家", now); return; }
-        this.PlayCombo(0, c, now);
+        if (!leading && !ComboRules.Beats(c, this.table)) { this.Toast("压不过上家", now); return; }
+        this.PlayCombo(0, c, cs, now);
     }
 
     void TryPass(int now) {
@@ -820,7 +672,8 @@ public class DdzGame {
                     if (this.turn == 2) { h = this.hand2; }
                     List<int> cs = new List<int>();
                     cs.Add(h[0]);
-                    this.PlayCombo(this.turn, DdzGame.Classify(cs), now);
+                    Combo one = ComboRules.Classify(DdzGame.RanksOf(cs));
+                    this.PlayCombo(this.turn, one, cs, now);
                 } else {
                     string name = "右家";
                     if (this.turn == 2) { name = "左家"; }
@@ -828,7 +681,9 @@ public class DdzGame {
                     this.PassTurn(this.turn, now);
                 }
             } else {
-                this.PlayCombo(this.turn, c, now);
+                List<int> aiHand = this.hand1;
+                if (this.turn == 2) { aiHand = this.hand2; }
+                this.PlayCombo(this.turn, c, this.CardsOf(c, aiHand), now);
             }
             return;
         }
@@ -840,7 +695,8 @@ public class DdzGame {
                 List<int> cs = new List<int>();
                 cs.Add(this.hand0[0].card);
                 this.Toast("超时，自动出最小单张", now);
-                this.PlayCombo(0, DdzGame.Classify(cs), now);
+                Combo to = ComboRules.Classify(DdzGame.RanksOf(cs));
+                this.PlayCombo(0, to, cs, now);
             } else {
                 this.Toast("超时，自动不出", now);
                 this.PassTurn(0, now);
@@ -860,11 +716,11 @@ public class DdzGame {
                 int bs = -1000000;
                 for (int i = 0; i < cands.Count; i = i + 1) {
                     Combo c = cands[i];
-                    int s = 0 - c.key * 6 + c.cards.Count * 30;
+                    int s = 0 - c.key * 6 + c.ranks.Count * 30;
                     if (c.type >= 8) { s = s - 500; }
                     if (s > bs) { bs = s; best = c; }
                 }
-                this.PlayCombo(0, best, now);
+                this.PlayCombo(0, best, this.CardsOf(best, this.PlayerCards()), now);
             }
         }
     }
@@ -962,14 +818,14 @@ public class DdzGame {
         CDraw.FillCircle(this.c, x + 38, y + 52, 12, 160, 110, 220, 255);
     }
 
-    void DrawShown(Combo c, int cx, int cy) {
-        if (c == null || c.type == 0) { return; }
-        int n = c.cards.Count;
+    void DrawShown(Combo c, List<int> cards, int cx, int cy) {
+        if (c == null || c.IsNone() || cards == null) { return; }
+        int n = cards.Count;
         int gap = 34;
         int total = (n - 1) * gap + 96;
         int x = cx - total / 2;
         for (int i = 0; i < n; i = i + 1) {
-            this.DrawCard(x + i * gap, cy, c.cards[i], false);
+            this.DrawCard(x + i * gap, cy, cards[i], false);
         }
     }
 
@@ -1043,9 +899,9 @@ public class DdzGame {
                 i = i + 1;
             }
         }
-        this.DrawShown(this.shown2, DdzGame.CX() - 240, 240);
-        this.DrawShown(this.shown1, DdzGame.CX() + 240, 240);
-        this.DrawShown(this.shown0, DdzGame.CX(), 360);
+        this.DrawShown(this.shown2, this.shown2Cards, DdzGame.CX() - 240, 240);
+        this.DrawShown(this.shown1, this.shown1Cards, DdzGame.CX() + 240, 240);
+        this.DrawShown(this.shown0, this.shown0Cards, DdzGame.CX(), 360);
         if (this.scene >= 1) {
             int n = this.hand0.Count;
             i = 0;
@@ -1149,7 +1005,7 @@ public class DdzGame {
             this.DrawSeat(2, 30, 60, this.hand2.Count);
             this.DrawSeat(1, 1060, 60, this.hand1.Count);
         }
-        this.DrawShown(this.shown0, DdzGame.CX(), 360);
+        this.DrawShown(this.shown0, this.shown0Cards, DdzGame.CX(), 360);
     }
 
     // 菜单画布层：美术背景 + 标题（开始/难度按钮与战绩行走 DzMenuScene 的
