@@ -13,6 +13,9 @@ public class DzApp {
         router.Register("menu", new DzMenuScene(g));
         router.Register("play", new DzPlayScene(g));
         router.Register("over", new DzOverScene(g));
+        router.Register("settings", new DzSettingsScene(g));
+        // 设置读档一次（Game.Foundation.GameSettings 负责存盘与坏文件回退）。
+        DzSettings.Ensure();
         // demo 标记（ddz_demo.txt）直接进牌桌自弈供截图/无头验证。
         router.Run(g.demo ? "play" : "menu");
     }

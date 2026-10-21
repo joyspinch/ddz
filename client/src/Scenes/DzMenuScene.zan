@@ -16,10 +16,13 @@ public class DzMenuScene : HtmlScene {
         handlers.Add("easy", () => this.Pick(0));
         handlers.Add("normal", () => this.Pick(1));
         handlers.Add("hard", () => this.Pick(2));
+        handlers.Add("settings", () => this.router.Go("settings"));
     }
 
     void Pick(int d) {
         this.g.diff = d;
+        // 选过的难度记住：下次开游戏沿用（设置页也能改）。
+        DzSettings.SetAiDiffIndex(d);
         this.router.Go("play");
     }
 

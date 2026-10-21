@@ -1,0 +1,51 @@
+using System;
+using System.Collections.Generic;
+using Game.Foundation;
+
+// 斗地主设置：选项声明在共享基座 Game.Foundation 上（GameSettings 存盘、
+// 校验、坏文件回退；SettingsModel 把声明翻译成档位按钮）。
+// 这里只声明"斗地主有哪些选项"与便捷读法——存盘与档位计算都在基座里。
+public class DzSettings {
+    static GameSettings store;
+
+    static string Path() { return "ddz_settings.json"; }
+
+    static GameSettings Store() {
+        if (DzSettings.store == null) {
+            GameSettings s = new GameSettings().At(DzSettings.Path());
+            // 默认 AI 难度：菜单上选的难度会被记住，下次开游戏沿用。
+            s.AddOption("aiDiff", "AI 难度", "normal",
+                new List<string> { "easy", "normal", "hard" });
+            s.Load();
+            DzSettings.store = s;
+        }
+        return DzSettings.store;
+    }
+
+    // 启动时读一次配置。
+    public static void Ensure() { DzSettings.Store(); }
+
+    public static GameSettings Base() { return DzSettings.Store(); }
+
+    // 难度下标（0 简单 / 1 普通 / 2 困难）。
+    public static int AiDiffIndex() {
+        string v = DzSettings.Store().GetText("aiDiff");
+        if (v == "easy") { return 0; }
+        if (v == "hard") { return 2; }
+        return 1;
+    }
+
+    public static void SetAiDiffIndex(int index) {
+        string v = "normal";
+        if (index == 0) { v = "easy"; } else if (index == 2) { v = "hard"; }
+        GameSettings s = DzSettings.Store();
+        s.SetOption("aiDiff", v);
+        s.Save();
+    }
+
+    public static void ResetAll() {
+        GameSettings s = DzSettings.Store();
+        s.Reset();
+        s.Save();
+    }
+}

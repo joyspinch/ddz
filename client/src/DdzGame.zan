@@ -104,7 +104,7 @@ public class DdzGame {
         g.parts = new List<DdzParticle>();
         g.toastAt = -9999;
         g.table = Combo.None();
-        g.diff = 1;
+        g.diff = DzSettings.AiDiffIndex();
         g.demo = File.Exists("ddz_demo.txt");
         return g;
     }
